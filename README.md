@@ -74,7 +74,7 @@ flowchart LR
   B --> M
 ```
 
-### 2.2 Поток денег: Stars → журнал
+### 2.2 Поток денег: Stars → неизменяемый журнал денежных операций (money_entries)
 
 Схема собрана по `docs/COMMERCIAL_MVP.md`, `docs/LAUNCH_AUDIT_CURRENT.md`, `docs/ADVERTISER_INTEGRATION.md`
 и схеме `packages/db/src/schema/commercial.ts`.
@@ -85,7 +85,7 @@ sequenceDiagram
   participant Adv as Рекламодатель
   participant Bot as Бот (grammY)
   participant Srv as Сервер
-  participant Led as Денежный журнал
+  participant Led as Неизменяемый журнал денежных операций (money_entries)
   Adv->>Srv: Заявка на пополнение (XTR)
   Srv->>Adv: Одноразово привязанный счёт в боте
   Adv->>Bot: Оплата Telegram Stars
@@ -113,6 +113,20 @@ flowchart TB
   Core -.->|"403 для чужой роли"| X["Отказ"]
 ```
 
+### 2.4 Как это работает для пользователя
+
+Пользователь видит каталог из восьми подарков, карточку каждого подарка с прогресс-баром и детальную страницу выбранного подарка. В детальной странице показаны цена, баланс и прогресс. Каталог и карточки: `apps/web/src/screens/GiftMarketScreen.tsx:10-45`, `apps/web/src/components/GiftCard.tsx:22-23,49-72`; детали: `apps/web/src/screens/GiftDetailsScreen.tsx:41-124`; визуальный компонент прогресса: `apps/web/src/components/GiftProgress.tsx:11-55`.
+
+Прогресс не хранится отдельно: он вычисляется из доступного баланса (`spendablePoints`) — суммы append-only журнала — по формуле `ratio = min(spendable / pricePoints, 1)`, процент: `floor(spendable * 100 / pricePoints)`, остаток: `max(0, pricePoints - spendable)`. При `spendable >= pricePoints` подарок доступен; некорректная или неположительная цена считается полностью покрытой. Формула: `packages/shared/src/gift-progress.ts:3-7,27-50`; получение баланса: `apps/server/src/app.ts:196-204,270-278`; передача в UI: `apps/web/src/App.tsx:334-335`.
+
+При достаточном балансе пользователь может создать заявку через `POST /redemptions`: сервер проверяет доступность, резервирует подарок, списывает `pricePoints` и создаёт запись со статусом `reserved`. Запрос на клиенте: `apps/web/src/App.tsx:489-508`; маршрут: `apps/server/src/app.ts:732-776`; резервирование и списание: `apps/server/src/redemption-service.ts:221-289`.
+
+Выдача не автоматизирована. Единственный транспорт — `FakeGiftTransport`, который не выполняет сетевых вызовов и не подключён к маршрутам резервирования (`apps/server/src/gift-transport.ts:16-25`). `REAL_GIFT_REDEMPTION=true` запрещён: с ним сервер не запускается (`apps/server/src/config.ts:258-268`). Администратор вручную помечает заявку отправленной через `POST /admin/redemptions/:id/sent` (`apps/server/src/admin-routes.ts:331-351`).
+
+**Со слов владельца:** «пользователь выбирает любой Telegram-подарок и видит прогресс до его получения».
+
+В коде подтверждён прогресс по каждому из восьми подарков. Не подтверждены выбор и сохранение персональной цели: механика цели удалена, колонка `users.selected_gift_id` оставлена как deprecated и продуктовым кодом не читается (`packages/db/src/schema/index.ts:283-305`; `packages/shared/src/index.ts:76-93`). Утверждение про «любой» подарок также не подтверждено: клиент показывает фиксированный shortlist из восьми ID (`apps/web/src/App.tsx:66-72,145-150`; `packages/shared/src/curated-gifts.ts:1-8`).
+
 ## 3. Ключевые решения и почему
 
 Только то, что нашёл в документах/коде. Для каждого решения указан источник.
@@ -121,7 +135,7 @@ flowchart TB
 |---|---|---|
 | Modular monolith, одна SQLite | В документах явно не обосновано; зафиксировано правило «продуктовая логика вне UI-кода». Контекст: проект ведёт один человек (`docs/sales-system.md`: «solo-founder») | `AGENTS.md` |
 | Журнал баллов только добавляется: награды — положительные строки, отмены — отдельные отрицательные; баланс = сумма журнала | Прозрачная сверка, нет «тихой» правки баланса. Баланс может уйти в минус (модель долга) — будущие начисления гасят долг | `docs/FINANCIAL_MODEL.md`, `docs/ADVERTISER_INTEGRATION.md` |
-| Денежный журнал рекламодателей неизменяем на уровне БД: триггеры `BEFORE UPDATE/DELETE` с `RAISE(ABORT, 'Money journal is immutable')`; исправления — компенсирующие проводки | Запрет правки истории денег | `packages/db/migrations/0017_narrow_masque.sql`, `docs/COMMERCIAL_MVP.md` |
+| Неизменяемый журнал денежных операций (money_entries) рекламодателей защищён на уровне БД: триггеры `BEFORE UPDATE/DELETE` с `RAISE(ABORT, 'Money journal is immutable')`; исправления — компенсирующие проводки | Запрет правки истории денег | `packages/db/migrations/0017_narrow_masque.sql`, `docs/COMMERCIAL_MVP.md` |
 | Суммы — целые минимальные единицы; XTR и TON не конвертируются и не суммируются | Исключить ошибки округления и ложную «прибыль» | `docs/COMMERCIAL_MVP.md`, CHECK `money_amount_integer` в схеме |
 | Идемпотентность денег на уровне уникальных индексов: `money_entry_operation`, `money_request_idempotency`, `money_request_telegram_charge`, `telegram_star_payments_charge_unique`, `gift_redemptions_user_idempotency_unique` | Повтор callback/запроса не должен дублировать деньги | `packages/db/src/schema/commercial.ts`, `schema/index.ts` |
 | Stars зачисляются только после `pre_checkout_query` + `successful_payment` с проверкой суммы/валюты/плательщика | Клиентским данным не доверяем | `docs/COMMERCIAL_MVP.md`, `docs/LAUNCH_AUDIT_CURRENT.md`, `apps/server/src/telegram-bot.ts` |
@@ -131,10 +145,10 @@ flowchart TB
 | Выдача Gift — ручная; реальная доставка запрещена конфигом: сервер не стартует с `REAL_GIFT_REDEMPTION=true` | Честность: не делать вид, что флаг что-то включает | `apps/server/src/config.ts:258-267`, `docs/GIFT_REDEMPTION_MODEL.md` |
 | Сетевые вызовы не внутри `BEGIN IMMEDIATE`; неоднозначный ответ доставки → `awaiting_reconciliation`, без авто-ретрая и авто-возврата | Не допустить двойной траты (Gift мог уйти, ответ потерян) | `docs/GIFT_REDEMPTION_MODEL.md` |
 | Quality Score — детерминированный, только для просмотра админом, никогда не банит автоматически; IP/UA хранятся как HMAC-SHA-256 | Слабый сигнал, не приговор; приватность | `docs/QUALITY_AND_RISK.md` |
-| Механика «цель-Gift» удалена: единый баланс = прогресс ко всем подаркам | Упрощение первого экрана | `packages/shared/src/index.ts:80-83`, `docs/TEST_LAUNCH_SPEC.md` §1 |
+| Механика «цель-Gift» удалена: единый баланс = прогресс ко всем подаркам; при этом прогресс показывается по каждому подарку из единого баланса | Упрощение первого экрана | `packages/shared/src/index.ts:80-83`, `apps/web/src/components/GiftCard.tsx:22-72`, `docs/TEST_LAUNCH_SPEC.md` §1 |
 | Casino/GameFi-эстетика запрещена в дизайне; гемблинг/беттинг/казино-рекламодатели — DISQUALIFY | Позиционирование и риск | `docs/TEST_LAUNCH_SPEC.md:400`, `docs/sales-system.md:122`, `docs/sales-rules.md:234` |
 
-## 4. Результаты и цифры (подтверждённые)
+## 4. Результаты и цифры
 
 Полная таблица с источниками и датой — [docs/EVIDENCE.md](docs/EVIDENCE.md). Кратко:
 
@@ -174,11 +188,16 @@ flowchart TB
 ## 6. Как запустить
 
 Исходники продукта приватные; запускать здесь нечего. Демо-репозитории модулей — отдельные витрины в этом же
-каталоге портфолио: `model-pool`, `quality-gate`, `lead-hunter`, `agent-runtime` (см. [developer-factory-case](../developer-factory-case/README.md);
+каталоге портфолио: `model-pool`, `quality-gate`, `lead-hunter`, `agent-runtime` (см. developer-factory-case;
 `lead-hunter` относится к продажам GiftQuest). На момент подготовки витрины этих каталогов в портфолио ещё нет.
 
 ## 7. Моя роль
 
-Продуктовая постановка, архитектура, приёмка. Код написан с помощью ИИ-агентов (Claude, Codex) под управлением
-владельца: я формулировал требования и ограничения (деньги, роли, честность по статусу), принимал результат по тестам
+Продуктовая постановка, архитектура и приёмка — мои. Код написан ИИ-агентами (Claude, Codex) под моим управлением.
+Я формулировал требования и ограничения (деньги, роли, честность по статусу), принимал результат по тестам
 и аудитам. Это не код-ревью каждой строки вручную.
+
+## Связанные репозитории
+
+- [lead-hunter](https://github.com/potia-byte/lead-hunter) — поиск рекламодателей-лидов в Telegram (демо-модуль)
+- [developer-factory-case](https://github.com/potia-byte/developer-factory-case) — система ИИ-агентов, которой разрабатывался продукт
