@@ -115,7 +115,7 @@ flowchart TB
 
 ### 2.4 Как это работает для пользователя
 
-Пользователь видит каталог из восьми подарков, карточку каждого подарка с прогресс-баром и детальную страницу выбранного подарка. В детальной странице показаны цена, баланс и прогресс. Каталог и карточки: `apps/web/src/screens/GiftMarketScreen.tsx:10-45`, `apps/web/src/components/GiftCard.tsx:22-23,49-72`; детали: `apps/web/src/screens/GiftDetailsScreen.tsx:41-124`; визуальный компонент прогресса: `apps/web/src/components/GiftProgress.tsx:11-55`.
+Пользователь видит каталог Telegram-подарков, по каждому показан прогресс до получения (баланс / цена, баланс из append-only журнала). В каталоге сейчас восемь подарков; есть карточка каждого подарка с прогресс-баром и детальная страница выбранного подарка. В детальной странице показаны цена, баланс и прогресс. Каталог и карточки: `apps/web/src/screens/GiftMarketScreen.tsx:10-45`, `apps/web/src/components/GiftCard.tsx:22-23,49-72`; детали: `apps/web/src/screens/GiftDetailsScreen.tsx:41-124`; визуальный компонент прогресса: `apps/web/src/components/GiftProgress.tsx:11-55`.
 
 Прогресс не хранится отдельно: он вычисляется из доступного баланса (`spendablePoints`) — суммы append-only журнала — по формуле `ratio = min(spendable / pricePoints, 1)`, процент: `floor(spendable * 100 / pricePoints)`, остаток: `max(0, pricePoints - spendable)`. При `spendable >= pricePoints` подарок доступен; некорректная или неположительная цена считается полностью покрытой. Формула: `packages/shared/src/gift-progress.ts:3-7,27-50`; получение баланса: `apps/server/src/app.ts:196-204,270-278`; передача в UI: `apps/web/src/App.tsx:334-335`.
 
@@ -125,7 +125,7 @@ flowchart TB
 
 **Со слов владельца:** «пользователь выбирает любой Telegram-подарок и видит прогресс до его получения».
 
-В коде подтверждён прогресс по каждому из восьми подарков. Не подтверждены выбор и сохранение персональной цели: механика цели удалена, колонка `users.selected_gift_id` оставлена как deprecated и продуктовым кодом не читается (`packages/db/src/schema/index.ts:283-305`; `packages/shared/src/index.ts:76-93`). Утверждение про «любой» подарок также не подтверждено: клиент показывает фиксированный shortlist из восьми ID (`apps/web/src/App.tsx:66-72,145-150`; `packages/shared/src/curated-gifts.ts:1-8`).
+В коде подтверждены каталог и прогресс по каждому из восьми подарков. Не подтверждено, что это «любой» подарок из всего каталога Telegram: клиент показывает фиксированный shortlist из восьми ID (`apps/web/src/App.tsx:66-72,145-150`; `packages/shared/src/curated-gifts.ts:1-8`).
 
 ## 3. Ключевые решения и почему
 
@@ -145,7 +145,7 @@ flowchart TB
 | Выдача Gift — ручная; реальная доставка запрещена конфигом: сервер не стартует с `REAL_GIFT_REDEMPTION=true` | Честность: не делать вид, что флаг что-то включает | `apps/server/src/config.ts:258-267`, `docs/GIFT_REDEMPTION_MODEL.md` |
 | Сетевые вызовы не внутри `BEGIN IMMEDIATE`; неоднозначный ответ доставки → `awaiting_reconciliation`, без авто-ретрая и авто-возврата | Не допустить двойной траты (Gift мог уйти, ответ потерян) | `docs/GIFT_REDEMPTION_MODEL.md` |
 | Quality Score — детерминированный, только для просмотра админом, никогда не банит автоматически; IP/UA хранятся как HMAC-SHA-256 | Слабый сигнал, не приговор; приватность | `docs/QUALITY_AND_RISK.md` |
-| Механика «цель-Gift» удалена: единый баланс = прогресс ко всем подаркам; при этом прогресс показывается по каждому подарку из единого баланса | Упрощение первого экрана | `packages/shared/src/index.ts:80-83`, `apps/web/src/components/GiftCard.tsx:22-72`, `docs/TEST_LAUNCH_SPEC.md` §1 |
+| Каталог Telegram-подарков: по каждому показан прогресс до получения (баланс / цена, баланс из append-only журнала) | Упрощение первого экрана | `packages/shared/src/index.ts:80-83`, `apps/web/src/components/GiftCard.tsx:22-72`, `docs/TEST_LAUNCH_SPEC.md` §1 |
 | Casino/GameFi-эстетика запрещена в дизайне; гемблинг/беттинг/казино-рекламодатели — DISQUALIFY | Позиционирование и риск | `docs/TEST_LAUNCH_SPEC.md:400`, `docs/sales-system.md:122`, `docs/sales-rules.md:234` |
 
 ## 4. Результаты и цифры
@@ -180,6 +180,7 @@ flowchart TB
   (`docs/TEST_LAUNCH_HANDOFF.md`, «Known intentional limitations»).
 - Rate limiter в памяти: годится только для одного процесса (`docs/LAUNCH_AUDIT_CURRENT.md`, Post-launch).
 - Устаревшие документы: «295 tests» в `LAUNCH_AUDIT_CURRENT.md` — историческая цифра (2026-09-06).
+- **Выбор персонального подарка-цели убран из продукта.** Со слов владельца, он был и может быть возвращён. В коде механика цели удалена, а колонка `users.selected_gift_id` осталась как deprecated (`packages/db/src/schema/index.ts`; `packages/shared/src/index.ts`).
 
 **Что дальше (из `LAUNCH_AUDIT_CURRENT.md`, раздел Post-launch):** авто-возвраты Stars при росте объёма; авто-TON после
 выбора кошелька/провайдера; общий rate limiter при нескольких процессах; автоматическая выдача Gift — только после
